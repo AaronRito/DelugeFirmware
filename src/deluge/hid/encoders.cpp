@@ -38,7 +38,7 @@
 extern "C" {
 #include "RZA1/gpio/gpio.h"
 #include "RZA1/intc/devdrv_intc.h"
-#include "RZA1/system/iodefine.h"
+#include "RZA1/mtu/mtu.h"
 }
 
 namespace deluge::hid::encoders {
@@ -78,11 +78,12 @@ constexpr EncoderIrqEntry kEncoderIrqMap[kNumEncoders] = {
 /// wrapped at ±128 ticks, which a fast user can reach in well under a single drain interval).
 std::atomic<int16_t> encoderEdgeDeltas[kNumEncoders] = {};
 
-/// Per-encoder previous (A,B) state encoded as `(A << 1) | B`, updated by the ISR. The
-/// state-machine transition lookup using prev→new is what makes the decoder immune to the
-/// B-pin sample race that caused gold knobs to flip direction at fast spin, and to contact
-/// bounce on the falling A edge (a bounce produces prev==new and contributes 0).
-volatile uint8_t encoderPrevState[kNumEncoders] = {};
+/// Software debounce per encoder. Superfast timer (TCNT_0) runs at 33.33 MHz and wraps every
+/// ~2 ms; we use unsigned 16-bit wrap-safe subtraction. 16667 ticks ≈ 500 µs, which is well
+/// above typical mechanical-encoder bounce duration (~100 µs) and well below the fastest
+/// plausible legitimate edge interval (~5 ms even at 200 cycles/s on a gold knob).
+constexpr uint16_t kEncoderDebounceTicks = 16667;
+volatile uint16_t encoderLastEdgeTime[kNumEncoders] = {};
 
 template <size_t IDX>
 void encoderIrqHandler(uint32_t /*sense*/) {
@@ -92,37 +93,20 @@ void encoderIrqHandler(uint32_t /*sense*/) {
 	// fresh pending state instead of being lost.
 	clearIRQInterrupt(m.irqNum);
 
-	// Atomic 16-bit snapshot of port 1 — A and B come from the same instant. Two separate
-	// readInput() calls would race at fast spin (B can transition during the gap between
-	// the two reads, inverting the direction read).
-	uint16_t portSnapshot = GPIO.PPR1;
-	uint8_t a = (portSnapshot >> m.irqPin) & 1u;
-	uint8_t b = (portSnapshot >> m.compPin) & 1u;
-	uint8_t newState = (uint8_t)((a << 1) | b);
-
-	uint8_t prevState = encoderPrevState[IDX];
-	encoderPrevState[IDX] = newState;
-
-	// Quadrature transition table for falling-A IRQ. Two clean transitions count, every
-	// other case (bounce, ambiguous "both bits changed", or a rare A-stayed-high spurious
-	// IRQ) records 0 — we already updated prevState so the next clean transition will be
-	// decoded correctly. Signs match the original (a == b) convention so the existing
-	// `invert` flags in kEncoderIrqMap stay valid.
-	int16_t inc;
-	switch ((uint8_t)((prevState << 2) | newState)) {
-	case 0b1000:
-		inc = +1;
-		break; // 10 → 00
-	case 0b1101:
-		inc = -1;
-		break; // 11 → 01
-	default:
+	uint16_t now = MTU2.TCNT_0;
+	uint16_t elapsed = (uint16_t)(now - encoderLastEdgeTime[IDX]);
+	if (elapsed < kEncoderDebounceTicks) {
 		return;
 	}
+	encoderLastEdgeTime[IDX] = now;
 
-	if (m.invert) {
-		inc = -inc;
-	}
+	// IRQ is configured falling-edge-only on A, so A is settled low at this point and B is
+	// stable mid-detent. Direction comes from the standard quadrature decode evaluated at
+	// a=0: cw = (a == b) = !b, with `invert` flipping the sense for encoders whose A/B pair
+	// is wired backwards relative to the polled mapping.
+	bool b = readInput(1, m.compPin) != 0;
+	bool cw = m.invert ? b : !b;
+	int16_t inc = cw ? +1 : -1;
 	encoderEdgeDeltas[IDX].fetch_add(inc, std::memory_order_relaxed);
 }
 
@@ -148,16 +132,6 @@ void initInterrupts() {
 
 		clearIRQInterrupt(m.irqNum);
 		setupAndEnableInterrupt(kEncoderIrqHandlers[i], INTC_ID_IRQ0 + m.irqNum, kEncoderIrqPriority);
-	}
-
-	// Seed each encoder's prevState from the current pin levels so the first real IRQ has a
-	// valid reference for transition decoding instead of comparing against zero.
-	uint16_t portSnapshot = GPIO.PPR1;
-	for (size_t i = 0; i < kNumEncoders; i++) {
-		const auto& m = kEncoderIrqMap[i];
-		uint8_t a = (portSnapshot >> m.irqPin) & 1u;
-		uint8_t b = (portSnapshot >> m.compPin) & 1u;
-		encoderPrevState[i] = (uint8_t)((a << 1) | b);
 	}
 }
 } // namespace
