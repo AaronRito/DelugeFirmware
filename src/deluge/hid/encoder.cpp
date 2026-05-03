@@ -27,7 +27,6 @@ extern "C" {
 Encoder::Encoder() {
 	encPos = 0;
 	detentPos = 0;
-	edgeAccumulator = 0;
 	doDetents = true;
 }
 
@@ -40,22 +39,14 @@ void Encoder::setNonDetentMode() {
 	doDetents = false;
 }
 
-void Encoder::applyEdges(int8_t edges) {
+void Encoder::applyEdges(int16_t edges) {
 	if (edges == 0) {
 		return;
 	}
-	// Two A-pin edges per quadrature cycle, one quadrature cycle per detent click on the
-	// Deluge encoders. Same halving as the embassy `take_detents()` does.
-	edgeAccumulator += edges;
-	int8_t ticks = edgeAccumulator / 2;
-	if (ticks == 0) {
-		return;
-	}
-	edgeAccumulator -= ticks * 2;
 	if (doDetents) {
-		detentPos += ticks;
+		detentPos += edges;
 	}
-	encPos += ticks;
+	encPos += edges;
 }
 
 int32_t Encoder::getLimitedDetentPosAndReset() {

@@ -38,6 +38,7 @@
 extern "C" {
 #include "RZA1/gpio/gpio.h"
 #include "RZA1/intc/devdrv_intc.h"
+#include "RZA1/mtu/mtu.h"
 }
 
 namespace deluge::hid::encoders {
@@ -72,18 +73,41 @@ constexpr EncoderIrqEntry kEncoderIrqMap[kNumEncoders] = {
     [util::to_underlying(EncoderName::MOD_0)] = {.irqPin = 0, .compPin = 15, .irqNum = 4, .invert = false},
 };
 
-/// Atomic edge counters written by ISRs, drained by `readEncoders()`.
-std::atomic<int8_t> encoderEdgeDeltas[kNumEncoders] = {};
+/// Atomic tick counters written by ISRs, drained by `readEncoders()`. One tick per accepted
+/// falling A-edge. int16_t so a sustained fast spin between drains can't overflow (int8_t
+/// wrapped at ±128 ticks, which a fast user can reach in well under a single drain interval).
+std::atomic<int16_t> encoderEdgeDeltas[kNumEncoders] = {};
+
+/// Software debounce per encoder. Superfast timer (TCNT_0) runs at 33.33 MHz and wraps every
+/// ~2 ms; we use unsigned 16-bit wrap-safe subtraction. 16667 ticks ≈ 500 µs, which is well
+/// above typical mechanical-encoder bounce duration (~100 µs) and well below the fastest
+/// plausible legitimate edge interval (~5 ms even at 200 cycles/s on a gold knob).
+constexpr uint16_t kEncoderDebounceTicks = 16667;
+volatile uint16_t encoderLastEdgeTime[kNumEncoders] = {};
 
 template <size_t IDX>
 void encoderIrqHandler(uint32_t /*sense*/) {
 	constexpr EncoderIrqEntry m = kEncoderIrqMap[IDX];
-	bool a = readInput(1, m.irqPin) != 0;
-	bool b = readInput(1, m.compPin) != 0;
-	bool cw = m.invert ? (a != b) : (a == b);
-	int8_t inc = cw ? +1 : -1;
-	encoderEdgeDeltas[IDX].fetch_add(inc, std::memory_order_relaxed);
+
+	// Clear the pending bit first so any edge that arrives during this handler latches a
+	// fresh pending state instead of being lost.
 	clearIRQInterrupt(m.irqNum);
+
+	uint16_t now = MTU2.TCNT_0;
+	uint16_t elapsed = (uint16_t)(now - encoderLastEdgeTime[IDX]);
+	if (elapsed < kEncoderDebounceTicks) {
+		return;
+	}
+	encoderLastEdgeTime[IDX] = now;
+
+	// IRQ is configured falling-edge-only on A, so A is settled low at this point and B is
+	// stable mid-detent. Direction comes from the standard quadrature decode evaluated at
+	// a=0: cw = (a == b) = !b, with `invert` flipping the sense for encoders whose A/B pair
+	// is wired backwards relative to the polled mapping.
+	bool b = readInput(1, m.compPin) != 0;
+	bool cw = m.invert ? b : !b;
+	int16_t inc = cw ? +1 : -1;
+	encoderEdgeDeltas[IDX].fetch_add(inc, std::memory_order_relaxed);
 }
 
 using IrqHandler = void (*)(uint32_t);
@@ -104,7 +128,7 @@ void initInterrupts() {
 
 		setPinAsInput(1, m.compPin);
 
-		setIRQInterruptBothEdges(m.irqNum);
+		setIRQInterruptFallingEdge(m.irqNum);
 
 		clearIRQInterrupt(m.irqNum);
 		setupAndEnableInterrupt(kEncoderIrqHandlers[i], INTC_ID_IRQ0 + m.irqNum, kEncoderIrqPriority);
@@ -132,7 +156,7 @@ void init() {
 
 void readEncoders() {
 	for (size_t i = 0; i < util::to_underlying(EncoderName::MAX_ENCODER); i++) {
-		int8_t edges = encoderEdgeDeltas[i].exchange(0, std::memory_order_relaxed);
+		int16_t edges = encoderEdgeDeltas[i].exchange(0, std::memory_order_relaxed);
 		if (edges != 0) {
 			encoders[i].applyEdges(edges);
 		}
@@ -169,15 +193,13 @@ bool interpretEncoders(bool skipActioning) {
 		if (encoders[e].detentPos != 0) {
 			anything = true;
 
-			// Limit. Some functions can break if they receive bigger numbers, e.g. LoadSongUI::selectEncoderAction()
-			int32_t limitedDetentPos = encoders[e].detentPos;
-			encoders[e].detentPos = 0; // Reset. Crucial that this happens before we call selectEncoderAction()
-			if (limitedDetentPos >= 0) {
-				limitedDetentPos = 1;
-			}
-			else {
-				limitedDetentPos = -1;
-			}
+			// Some handlers (e.g. LoadSongUI::selectEncoderAction) can't cope with magnitudes > 1, so we still
+			// only deliver one detent per interpretEncoders() call. But we now preserve the remainder so fast
+			// spins are processed across subsequent calls instead of being silently dropped (which is what
+			// happened with the old `detentPos = 0` reset before the interrupt-driven encoder change started
+			// piling up multiple detents per drain).
+			int32_t limitedDetentPos = (encoders[e].detentPos > 0) ? 1 : -1;
+			encoders[e].detentPos -= limitedDetentPos; // Crucial that this happens before we call selectEncoderAction()
 
 			ActionResult result;
 

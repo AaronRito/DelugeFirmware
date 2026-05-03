@@ -31,17 +31,16 @@ public:
 	Encoder& operator=(Encoder& other) = delete;
 	Encoder&& operator=(Encoder&& other) = delete;
 
-	/// Fold a number of A-pin edges (signed; from the IRQ accumulator) into encPos / detentPos.
-	/// Two edges = one detent step (or one raw tick for non-detent gold knobs), matching the
-	/// "1 quadrature cycle per detent" wiring on the Deluge encoders.
-	void applyEdges(int8_t edges);
+	/// Fold a number of decoded ticks (signed; from the IRQ accumulator) into encPos / detentPos.
+	/// One tick = one falling A-edge = one detent click on detented encoders, or one quadrature
+	/// cycle on non-detent gold knobs.
+	void applyEdges(int16_t edges);
 	void setPins(uint8_t pinA1New, uint8_t pinA2New, uint8_t pinB1New, uint8_t pinB2New);
 	void setNonDetentMode();
 	int32_t getLimitedDetentPosAndReset();
 	int8_t encPos;    // Keeps track of knob's position relative to centre of closest detent
 	int8_t detentPos; // Number of full detents offset since functions last dealt with
 private:
-	int8_t edgeAccumulator; // Leftover edges from applyEdges() that haven't yet formed a tick.
 	bool doDetents;
 };
 

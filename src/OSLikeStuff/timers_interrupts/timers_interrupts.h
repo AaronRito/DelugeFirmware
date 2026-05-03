@@ -44,6 +44,9 @@ void clearIRQInterrupt(int irqNumber);
 /// (e.g. the trigger-clock channel programmed in main()).
 void setIRQInterruptBothEdges(int irqNumber);
 
+/// Configure external interrupt `irqNumber` (0–7) for falling-edge detection.
+void setIRQInterruptFallingEdge(int irqNumber);
+
 /// sets up a timer with an interrupt and handler but does not enable the timer
 /// Valid scale values are 1, 4, 16, 64 for all timers 0-4. Timer 1, 3, 4 support 256. Timer 2, 3, 4 support 1024.
 /// resulting frequency is 33.33MHz/scale

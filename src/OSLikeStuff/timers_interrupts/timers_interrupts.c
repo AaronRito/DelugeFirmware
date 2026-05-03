@@ -86,6 +86,14 @@ void setIRQInterruptBothEdges(int irqNumber) {
 	INTC.ICR1 = val;
 }
 
+void setIRQInterruptFallingEdge(int irqNumber) {
+	uint16_t shift = (uint16_t)(irqNumber * 2);
+	uint16_t mask = (uint16_t)(0x3u << shift);
+	uint16_t val = INTC.ICR1;
+	val = (uint16_t)((val & ~mask) | (0x1u << shift));
+	INTC.ICR1 = val;
+}
+
 void setupTimerWithInterruptHandler(int timerNo, int scale, void (*handler)(uint32_t intSense), uint8_t priority) {
 	disableTimer(timerNo);
 	*TCNT[timerNo] = 0u;
