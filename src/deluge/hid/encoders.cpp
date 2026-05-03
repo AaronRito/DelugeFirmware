@@ -16,6 +16,7 @@
  */
 
 #include "hid/encoders.h"
+#include "OSLikeStuff/scheduler_api.h"
 #include "OSLikeStuff/timers_interrupts/timers_interrupts.h"
 #include "definitions_cxx.hpp"
 #include "extern.h"
@@ -32,6 +33,7 @@
 #include "processing/engines/audio_engine.h"
 #include "processing/stem_export/stem_export.h"
 #include "util/functions.h"
+#include <algorithm>
 #include <atomic>
 #include <new>
 
@@ -39,6 +41,7 @@ extern "C" {
 #include "RZA1/gpio/gpio.h"
 #include "RZA1/intc/devdrv_intc.h"
 #include "RZA1/mtu/mtu.h"
+#include "RZA1/system/iodefine.h"
 }
 
 namespace deluge::hid::encoders {
@@ -85,12 +88,50 @@ std::atomic<int16_t> encoderEdgeDeltas[kNumEncoders] = {};
 constexpr uint16_t kEncoderDebounceTicks = 16667;
 volatile uint16_t encoderLastEdgeTime[kNumEncoders] = {};
 
+/// Gold-knob acceleration multiplier state. Adapted from upstream PR #4484. A spin held in
+/// one direction with short inter-event intervals builds `currentKnobSpeed` toward the max;
+/// a pause longer than `reset_speed_time_threshold` or a change in `offset` resets it. The
+/// returned value is multiplied into the `encoder.encPos` magnitude passed to
+/// `modEncoderAction`, so faster spinning yields proportionally bigger value changes —
+/// without requiring users to spin so fast that they enter the IRQ B-pin race regime.
+double currentKnobSpeed = 0.0;
+
+double calcNextKnobSpeed(int8_t offset) {
+	constexpr double acceleration = 0.1;
+	constexpr double inertia = 1.0 - acceleration;
+	constexpr double speed_scale = 0.15;
+	constexpr double min_speed = 1.0;
+	constexpr double max_speed = 5.0;
+	constexpr double reset_speed_time_threshold = 0.3;
+
+	static int8_t last_offset = 0;
+	static double last_encoder_time = 0.0;
+	const double time = getSystemTime();
+
+	if (time - last_encoder_time >= reset_speed_time_threshold || offset != last_offset) {
+		currentKnobSpeed = 0.0;
+	}
+	else {
+		currentKnobSpeed = currentKnobSpeed * inertia + 1.0 / (time - last_encoder_time) * acceleration;
+	}
+	last_encoder_time = time;
+	last_offset = offset;
+	return std::clamp(currentKnobSpeed * speed_scale, min_speed, max_speed);
+}
+
 template <size_t IDX>
 void encoderIrqHandler(uint32_t /*sense*/) {
 	constexpr EncoderIrqEntry m = kEncoderIrqMap[IDX];
 
-	// Clear the pending bit first so any edge that arrives during this handler latches a
-	// fresh pending state instead of being lost.
+	// Sample B as the very first thing in the ISR — before clearIRQInterrupt, the timer
+	// read, and the debounce check — to minimize the gap between when the IRQ fired (the
+	// instant A actually fell) and when we read B. At fast spin (gold knobs) B can begin
+	// its own transition within microseconds of the A edge; reading it later in the ISR
+	// gave it time to drift to the wrong half of the cycle and inverted the direction.
+	bool b = ((GPIO.PPR1) >> m.compPin) & 1u;
+
+	// Clear the pending bit so any edge that arrives during this handler latches a fresh
+	// pending state instead of being lost.
 	clearIRQInterrupt(m.irqNum);
 
 	uint16_t now = MTU2.TCNT_0;
@@ -100,11 +141,9 @@ void encoderIrqHandler(uint32_t /*sense*/) {
 	}
 	encoderLastEdgeTime[IDX] = now;
 
-	// IRQ is configured falling-edge-only on A, so A is settled low at this point and B is
-	// stable mid-detent. Direction comes from the standard quadrature decode evaluated at
-	// a=0: cw = (a == b) = !b, with `invert` flipping the sense for encoders whose A/B pair
-	// is wired backwards relative to the polled mapping.
-	bool b = readInput(1, m.compPin) != 0;
+	// IRQ is configured falling-edge-only on A, so cw = (a == b) at a=0 simplifies to !b.
+	// `invert` flips the sense for encoders whose A/B pair is wired backwards relative to
+	// the polled mapping.
 	bool cw = m.invert ? b : !b;
 	int16_t inc = cw ? +1 : -1;
 	encoderEdgeDeltas[IDX].fetch_add(inc, std::memory_order_relaxed);
@@ -286,7 +325,8 @@ checkResult:
 
 					// Do it, only if
 					if (encoder.encPos + modEncoderInitialTurnDirection[e] != 0) {
-						getCurrentUI()->modEncoderAction(e, encoder.encPos);
+						getCurrentUI()->modEncoderAction(e,
+						                                 (int32_t)(encoder.encPos * calcNextKnobSpeed(encoder.encPos)));
 						modEncoderInitialTurnDirection[e] = 0;
 					}
 
