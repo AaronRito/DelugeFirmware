@@ -2328,6 +2328,10 @@ void InstrumentClip::writeDataToFile(Serializer& writer, Song* song) {
 	}
 	if (output->type == OutputType::KIT) {
 		writer.writeAttribute("affectEntire", affectEntire);
+		if (kitMidiOutChannel != MIDI_CHANNEL_NONE) {
+			writer.writeAttribute("kitMidiOutChannel", kitMidiOutChannel);
+			writer.writeAttribute("kitMidiOutBaseNote", kitMidiOutBaseNote);
+		}
 	}
 
 	Instrument* instrument = (Instrument*)output;
@@ -2348,12 +2352,6 @@ void InstrumentClip::writeDataToFile(Serializer& writer, Song* song) {
 		}
 		if (midiPGM != 128) {
 			writer.writeAttribute("midiPGM", midiPGM);
-		}
-	}
-	else if (output->type == OutputType::KIT) {
-		if (kitMidiOutChannel != MIDI_CHANNEL_NONE) {
-			writer.writeAttribute("kitMidiOutChannel", kitMidiOutChannel);
-			writer.writeAttribute("kitMidiOutBaseNote", kitMidiOutBaseNote);
 		}
 	}
 	else if (output->type == OutputType::CV) {
