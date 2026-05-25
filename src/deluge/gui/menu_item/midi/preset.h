@@ -30,6 +30,23 @@ public:
 
 	[[nodiscard]] int32_t getMaxValue() const override { return 128; } // Probably not needed cos we override below...
 
+	void beginSession(MenuItem* navigatedBackwardFrom) override {
+		Integer::beginSession(navigatedBackwardFrom);
+		valueAtSessionStart = this->getValue();
+	}
+
+	// Send the configured Bank/Sub/PGM triplet once when the user commits a change by leaving
+	// the leaf screen. In-menu encoder turns intentionally do not broadcast (see b2fcaf45).
+	void endSession() override {
+		MenuItem::endSession();
+		if (this->getValue() != valueAtSessionStart) {
+			InstrumentClip* clip = getCurrentInstrumentClip();
+			if (clip != nullptr && getCurrentOutputType() == OutputType::MIDI_OUT) {
+				clip->sendMIDIPGM();
+			}
+		}
+	}
+
 	void drawInteger(int32_t textWidth, int32_t textHeight, int32_t yPixel) override {
 		oled_canvas::Canvas& canvas = OLED::main;
 		char buffer[12];
@@ -90,5 +107,8 @@ public:
 	}
 
 	[[nodiscard]] bool showNotification() const override { return false; }
+
+private:
+	int32_t valueAtSessionStart = 128;
 };
 } // namespace deluge::gui::menu_item::midi
