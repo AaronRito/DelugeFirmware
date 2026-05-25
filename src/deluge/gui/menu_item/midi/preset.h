@@ -30,6 +30,23 @@ public:
 
 	[[nodiscard]] int32_t getMaxValue() const override { return 128; } // Probably not needed cos we override below...
 
+	void beginSession(MenuItem* navigatedBackwardFrom) override {
+		Integer::beginSession(navigatedBackwardFrom);
+		valueAtSessionStart = this->getValue();
+	}
+
+	// Send the configured Bank/Sub/PGM triplet once when the user commits a change by leaving
+	// the leaf screen. In-menu encoder turns intentionally do not broadcast (see b2fcaf45).
+	void endSession() override {
+		MenuItem::endSession();
+		if (this->getValue() != valueAtSessionStart) {
+			InstrumentClip* clip = getCurrentInstrumentClip();
+			if (clip != nullptr && getCurrentOutputType() == OutputType::MIDI_OUT) {
+				clip->sendMIDIPGM();
+			}
+		}
+	}
+
 	void drawInteger(int32_t textWidth, int32_t textHeight, int32_t yPixel) override {
 		oled_canvas::Canvas& canvas = OLED::main;
 		char buffer[12];
@@ -38,7 +55,8 @@ public:
 			text = l10n::get(l10n::String::STRING_FOR_NONE);
 		}
 		else {
-			intToString(this->getValue(), buffer, 1);
+			// Show 1-based to match the synth/DAW convention: wire byte 0 is "Patch 1" everywhere.
+			intToString(this->getValue() + 1, buffer, 1);
 			text = buffer;
 		}
 		canvas.drawStringCentred(text, yPixel + OLED_MAIN_TOPMOST_PIXEL, textWidth, textHeight);
@@ -49,7 +67,8 @@ public:
 			display->setText(l10n::get(l10n::String::STRING_FOR_NONE));
 		}
 		else {
-			display->setTextAsNumber(this->getValue());
+			// Show 1-based; storage and the wire stay 0-127 per the MIDI spec.
+			display->setTextAsNumber(this->getValue() + 1);
 		}
 	}
 
@@ -79,7 +98,7 @@ public:
 			size_y = kTextSpacingY;
 		}
 		else {
-			paramValue.appendInt(getValue());
+			paramValue.appendInt(getValue() + 1); // show 1-based
 			size_x = kTextTitleSpacingX;
 			size_y = kTextTitleSizeY;
 		}
@@ -88,5 +107,8 @@ public:
 	}
 
 	[[nodiscard]] bool showNotification() const override { return false; }
+
+private:
+	int32_t valueAtSessionStart = 128;
 };
 } // namespace deluge::gui::menu_item::midi
