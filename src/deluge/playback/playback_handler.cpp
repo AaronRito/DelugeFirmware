@@ -52,7 +52,9 @@
 #include "model/consequence/consequence.h"
 #include "model/consequence/consequence_begin_playback.h"
 #include "model/consequence/consequence_tempo_change.h"
+#include "model/drum/midi_drum.h"
 #include "model/instrument/kit.h"
+#include "model/instrument/midi_instrument.h"
 #include "model/mod_controllable/mod_controllable_audio.h"
 #include "model/model_stack.h"
 #include "model/sample/sample_holder.h"
@@ -588,6 +590,37 @@ void PlaybackHandler::endPlayback() {
 	// remember why I wrote that, and now it needs to happen before so that
 	// Clip::beingRecordedFrom is still set when playback ends, so notes stop)
 	bool shouldDoInstantSongSwap = currentPlaybackMode->endPlayback();
+
+	// Safety net for hanging notes on MIDI outputs. Per-clip cleanup above only stops notes
+	// that NoteRows know they sounded; arpeggiated, MPE-rerouted, or notes from clips that
+	// were deactivated mid-note can slip through. Skip when externally clocked — the upstream
+	// master is responsible for sending its own note-offs in that case.
+	if (!isExternalClockActive()) {
+		for (Output* output = currentSong->firstOutput; output != nullptr; output = output->next) {
+			if (output->type == OutputType::MIDI_OUT) {
+				((MIDIInstrument*)output)->allNotesOff();
+			}
+			else if (output->type == OutputType::KIT) {
+				uint16_t channelsSent = 0;
+				for (Drum* drum = ((Kit*)output)->firstDrum; drum != nullptr; drum = drum->next) {
+					if (drum->type != DrumType::MIDI) {
+						continue;
+					}
+					auto* midiDrum = (MIDIDrum*)drum;
+					int32_t channel = midiDrum->channel;
+					if (channel < 0 || channel >= 16) {
+						continue;
+					}
+					uint16_t mask = 1 << channel;
+					if (channelsSent & mask) {
+						continue;
+					}
+					channelsSent |= mask;
+					midiEngine.sendAllNotesOff(midiDrum, channel, kMIDIOutputFilterNoMPE);
+				}
+			}
+		}
+	}
 
 	// Do this after calling currentPlaybackMode->endPlayback(), cos for arrangement that has to get the current
 	// tick, which needs to refer to which clock is active, which is stored in playbackState.

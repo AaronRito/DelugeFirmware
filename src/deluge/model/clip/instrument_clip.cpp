@@ -33,6 +33,7 @@
 #include "model/consequence/consequence_note_row_mute.h"
 #include "model/consequence/consequence_scale_add_note.h"
 #include "model/drum/drum_name.h"
+#include "model/drum/midi_drum.h"
 #include "model/instrument/cv_instrument.h"
 #include "model/instrument/midi_instrument.h"
 #include "model/iterance/iterance.h"
@@ -1149,6 +1150,13 @@ void InstrumentClip::expectNoFurtherTicks(Song* song, bool actuallySoundChange) 
 	    setupModelStackWithTimelineCounter(modelStackMemory, song, this); // TODO: make caller supply this
 
 	stopAllNotesPlaying(modelStack, actuallySoundChange && !currentlyRecordingLinearly); // Stop all sound
+
+	// Per-NoteRow cleanup above only stops notes the NoteRow knows it sounded; arp / MPE / audition strays slip
+	// through and hang on external MIDI gear, CV gates, and Kit MIDI drums. Same gate as the per-note cleanup so
+	// we don't kill notes during a linear-recording transition that's about to replay them.
+	if (actuallySoundChange && !currentlyRecordingLinearly) {
+		sendMIDIOrCVAllNotesOff();
+	}
 
 	ModelStackWithThreeMainThings* modelStackWithThreeMainThings =
 	    modelStack->addOtherTwoThingsButNoNoteRow(output->toModControllable(), &paramManager);
@@ -3286,15 +3294,41 @@ void InstrumentClip::stopAllNotesForMIDIOrCV(ModelStackWithTimelineCounter* mode
 	stopAllNotesPlaying(modelStack);
 
 	// And then we still need this but in case any notes have been sent out via audition, or I guess being echoed thru
+	sendMIDIOrCVAllNotesOff();
+}
 
-	// CV - easy
+// Catches notes that the per-NoteRow sequenced cleanup misses on the clip's output: arpeggiated notes mid-cycle,
+// MPE-rerouted notes, audition/thru-echoed notes. Skips internal Synth voices (those manage their own envelope
+// release on note-off) and AudioOutput.
+void InstrumentClip::sendMIDIOrCVAllNotesOff() {
+	if (output == nullptr) {
+		return;
+	}
+
 	if (output->type == OutputType::CV) {
 		cvEngine.sendNote(false, ((CVInstrument*)output)->getChannel());
 	}
-
-	// MIDI - hard
 	else if (output->type == OutputType::MIDI_OUT) {
 		((MIDIInstrument*)output)->allNotesOff();
+	}
+	else if (output->type == OutputType::KIT) {
+		uint16_t channelsSent = 0;
+		for (Drum* drum = ((Kit*)output)->firstDrum; drum != nullptr; drum = drum->next) {
+			if (drum->type != DrumType::MIDI) {
+				continue;
+			}
+			auto* midiDrum = (MIDIDrum*)drum;
+			int32_t channel = midiDrum->channel;
+			if (channel < 0 || channel >= 16) {
+				continue;
+			}
+			uint16_t mask = 1 << channel;
+			if (channelsSent & mask) {
+				continue;
+			}
+			channelsSent |= mask;
+			midiEngine.sendAllNotesOff(midiDrum, channel, kMIDIOutputFilterNoMPE);
+		}
 	}
 }
 
