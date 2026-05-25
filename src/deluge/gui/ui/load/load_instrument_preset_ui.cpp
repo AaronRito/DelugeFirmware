@@ -75,7 +75,7 @@ bool LoadInstrumentPresetUI::opened() {
 	if (loadingSynthToKitRow) {
 		initialOutputType = outputTypeToLoad = OutputType::SYNTH;
 		if (soundDrumToReplace) {
-			initialName.set(&soundDrumToReplace->name);
+			initialName.set(soundDrumToReplace->drumName);
 		}
 		else {
 			initialName.set("");
@@ -210,10 +210,9 @@ Error LoadInstrumentPresetUI::setupForOutputType() {
 	else {
 		if (loadingSynthToKitRow && soundDrumToReplace) {
 
-			if (&soundDrumToReplace->name) {
-				String* name = &soundDrumToReplace->name;
-				enteredText.set(name);
-				searchFilename.set(name);
+			if (!soundDrumToReplace->drumName.empty()) {
+				enteredText.set(soundDrumToReplace->drumName);
+				searchFilename.set(soundDrumToReplace->drumName);
 			}
 
 			if (&soundDrumToReplace->path) {
@@ -1096,7 +1095,7 @@ Error LoadInstrumentPresetUI::performLoadSynthToKit() {
 	soundDrumToReplace->loadAllSamples(true);
 
 	// soundDrumToReplace->name.set(getCurrentFilenameWithoutExtension());
-	getCurrentFilenameWithoutExtension(&soundDrumToReplace->name);
+	soundDrumToReplace->drumName = getCurrentFilenameWithoutExtension();
 	soundDrumToReplace->path.set(&currentDir);
 	ParamManager* paramManager =
 	    currentSong->getBackedUpParamManagerPreferablyWithClip(soundDrumToReplace, instrumentClipToLoadFor);
@@ -1593,11 +1592,11 @@ doneMoving:
 		deluge::hid::display::OLED::sendMainImage(); // Sorta cheating - bypassing the UI layered renderer.
 	}
 
-	if (encoders::getEncoder(EncoderName::SELECT).detentPos) {
+	if (encoders::getEncoder(EncoderName::SELECT).getDetentPos()) {
 		D_PRINTLN("go again 1 --------------------------");
 
 doPendingPresetNavigation:
-		offset = encoders::getEncoder(EncoderName::SELECT).getLimitedDetentPosAndReset();
+		offset = std::clamp<int8_t>(encoders::getEncoder(EncoderName::SELECT).readDetentPos(), -1, 1);
 
 		if (toReturn.loadedFromFile) {
 			currentSong->deleteOutput(toReturn.fileItem->instrument);
@@ -1621,7 +1620,7 @@ doPendingPresetNavigation:
 
 		toReturn.loadedFromFile = true;
 
-		if (encoders::getEncoder(EncoderName::SELECT).detentPos) {
+		if (encoders::getEncoder(EncoderName::SELECT).getDetentPos()) {
 			D_PRINTLN("go again 2 --------------------------");
 			goto doPendingPresetNavigation;
 		}
@@ -1636,7 +1635,7 @@ doPendingPresetNavigation:
 	currentUIMode = oldUIMode;
 
 	// If user wants to move on...
-	if (encoders::getEncoder(EncoderName::SELECT).detentPos) {
+	if (encoders::getEncoder(EncoderName::SELECT).getDetentPos()) {
 		D_PRINTLN("go again 3 --------------------------");
 		goto doPendingPresetNavigation;
 	}
