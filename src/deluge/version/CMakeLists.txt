@@ -8,7 +8,7 @@ find_package(Git REQUIRED QUIET)
 # Get the result of git rev-parse --short HEAD
 execute_process(
     COMMAND $\{GIT_EXECUTABLE} rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY \"${CMAKE_SOURCE_DIR}\"
     OUTPUT_VARIABLE GIT_COMMIT_SHORT
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
@@ -16,7 +16,7 @@ execute_process(
 # Get the result of git status --porcelain
 execute_process(
     COMMAND $\{GIT_EXECUTABLE} status --porcelain
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY \"${CMAKE_SOURCE_DIR}\"
     OUTPUT_VARIABLE GIT_STATUS
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
