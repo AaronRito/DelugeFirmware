@@ -103,6 +103,8 @@
 #include "gui/menu_item/midi/follow/follow_feedback_automation.h"
 #include "gui/menu_item/midi/follow/follow_feedback_channel_type.h"
 #include "gui/menu_item/midi/follow/follow_kit_root_note.h"
+#include "gui/menu_item/midi/kit/apply_to_column.h"
+#include "gui/menu_item/midi/kit/output_base_note.h"
 #include "gui/menu_item/midi/kit/output_channel.h"
 #include "gui/menu_item/midi/mpe_to_mono.h"
 #include "gui/menu_item/midi/pgm.h"
@@ -626,7 +628,10 @@ Submenu outputMidiSubmenu{STRING_FOR_MIDI, {&outputMidiChannelMenu, &outputMidiN
 
 // Kit-level MIDI output: sets channel + sequential note numbers for all SoundDrums at once
 midi::kit::OutputMidiChannel kitOutputMidiChannelMenu{STRING_FOR_CHANNEL, STRING_FOR_CHANNEL};
-Submenu kitMidiOutputSubmenu{STRING_FOR_MIDI, {&kitOutputMidiChannelMenu}};
+midi::kit::OutputBaseNote kitOutputMidiBaseNoteMenu{STRING_FOR_NOTE, STRING_FOR_NOTE};
+midi::kit::ApplyToColumn kitMidiApplyToColumnMenu{STRING_FOR_APPLY_TO_COLUMN, STRING_FOR_APPLY_TO_COLUMN};
+Submenu kitMidiOutputSubmenu{STRING_FOR_MIDI,
+                             {&kitOutputMidiChannelMenu, &kitOutputMidiBaseNoteMenu, &kitMidiApplyToColumnMenu}};
 
 // MIDIInstrument menu ----------------------------------------------------------------------
 midi::device_definition::Linked midiDeviceLinkedMenu{STRING_FOR_MIDI_DEVICE_DEFINITION_LINKED,
